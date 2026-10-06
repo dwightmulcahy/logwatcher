@@ -41,18 +41,28 @@ The target container must write one JSON object per line to stdout:
 
 ## Setup (QNAP / any Docker host)
 
-1. Copy `logwatch.py` to the host, e.g. `/share/Data/config/logwatch/logwatch.py`, and make it read-only for others:
-   ```sh
-   chmod 644 /share/Data/config/logwatch/logwatch.py
-   ```
-   The container has the Docker socket (root-equivalent), so nobody else should be able to edit the script.
-2. Copy `.env.example` to `.env`, fill it in, `chmod 600 .env`.
-3. Create a data folder per watched app, e.g. `mkdir -p /share/Data/config/<app>/logwatch-data`.
-4. Add a service based on [`example.docker-compose.yaml`](example.docker-compose.yaml) and deploy.
-5. Check `docker logs -f <logwatch container>` for `mode=... STATUS: ...` and `next run ...`, and wait for the test email.
-6. Set `RUN_ON_START=0` and redeploy, otherwise every restart or NAS reboot sends another report.
+The image is `dwightmulcahy/logwatcher` on Docker Hub (amd64 and arm64).
 
-To watch several apps, run one logwatch service per app, each with its own `TARGET_CONTAINER`, `APP_NAME` and `/data` folder. They can share `logwatch.py` and `.env`.
+1. Copy `.env.example` to `.env`, fill it in, `chmod 600 .env`.
+2. Create a data folder per watched app, e.g. `mkdir -p /share/Data/config/<app>/logwatch-data`.
+3. Add a service based on [`example.docker-compose.yaml`](example.docker-compose.yaml) and deploy.
+4. Check `docker logs -f <logwatch container>`: it prints `logwatch <version>: watching ...`, then `mode=... STATUS: ...` and `next run ...`. Wait for the test email.
+5. Set `RUN_ON_START=0` and redeploy, otherwise every restart or NAS reboot sends another report.
+
+To watch several apps, run one logwatch service per app, each with its own `TARGET_CONTAINER`, `APP_NAME` and `/data` folder. They can share the `.env`.
+
+To try local changes without building an image, mount your copy over the script (`/path/logwatch.py:/app/logwatch.py:ro`). Keep that file `chmod 644`: the container has the Docker socket, so whoever can edit the script can run code as root on the host.
+
+## Releasing
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:` ...), which drive both the version number and the release notes.
+
+- **Actions → Release → Run workflow:** leave the version empty and it is computed from the commits since the last tag (`feat` → minor, `fix` and others → patch, `type!:` or `BREAKING CHANGE` → major), or type one like `v1.4.0`.
+- **Or push a tag:** `git tag v1.4.0 && git push origin v1.4.0`.
+
+The workflow lints the script, builds a multi-arch image, pushes `X.Y.Z`, `X.Y` and `latest` (only for the newest version) to Docker Hub, smoke-tests it, and creates a GitHub Release with notes grouped by commit type. It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+
+Preview locally: `python3 scripts/release_notes.py next` and `python3 scripts/release_notes.py notes <tag>`.
 
 ## Settings
 

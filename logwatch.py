@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 import docker
 
+VERSION = os.getenv("LOGWATCH_VERSION", "dev")
 TZ = ZoneInfo(os.getenv("TZ", "America/Costa_Rica"))
 CONTAINER = os.getenv("TARGET_CONTAINER", "brewwatersolver")
 MODE = os.getenv("MODE", "hybrid").lower()
@@ -762,7 +763,7 @@ def render_html(summary, metrics, flags, meta, start, end, status_line, claude_t
 
     footer = (f'<tr><td style="padding:4px 4px 0;font:12px {FONT};color:#98a2b3">{_e(APP)} · container {_e(CONTAINER)} · '
               f'image {_e(meta["image"])} · started {_e(meta["started_at"])} · '
-              f'bot ranges: {_e(BOTS.source if BOTS else "n/a")} · mode {_e(MODE)}</td></tr>')
+              f'bot ranges: {_e(BOTS.source if BOTS else "n/a")} · mode {_e(MODE)} · logwatch {_e(VERSION)}</td></tr>')
     return (f'<!doctype html><html><body style="margin:0;padding:0;background:#f2f4f7">'
             f'<table width="100%" cellpadding="0" cellspacing="0" style="background:#f2f4f7"><tr><td align="center" '
             f'style="padding:24px 12px"><table width="100%" cellpadding="0" cellspacing="0" style="max-width:680px">'
@@ -851,6 +852,7 @@ def safe_run():
 
 
 if __name__ == "__main__":
+    print(f"logwatch {VERSION}: watching {CONTAINER} as {APP}, mode={MODE}, daily at {RUN_AT}", flush=True)
     if os.getenv("RUN_ON_START") == "1":
         safe_run()
     while True:

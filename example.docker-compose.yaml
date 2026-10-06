@@ -1,17 +1,19 @@
 services:
   logwatch:
-    image: python:3.12-slim
+    # Pin a version (e.g. dwightmulcahy/logwatcher:0.1) or use :latest with Watchtower
+    image: dwightmulcahy/logwatcher:latest
     container_name: webpage-logwatch
     restart: unless-stopped
-    command: sh -c "pip install -q --no-cache-dir docker anthropic && python -u /app/logwatch.py"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /share/Data/config/logwatch/logwatch.py:/app/logwatch.py:ro
 
-      # store the running log analysis data in the apps directory
+      # store the running log analysis data in the app's directory
       - /share/Data/config/webpage/logwatch-data:/data
 
-    # all the secrets so you don't have them published 
+      # optional: run a local copy of the script instead of the one in the image
+      # - /share/Data/config/logwatch/logwatch.py:/app/logwatch.py:ro
+
+    # all the secrets so you don't have them published
     env_file: /share/Data/config/logwatch/.env
 
     environment:
@@ -22,6 +24,7 @@ services:
       - PROBE_IGNORE=^/admin$
       - MODE=hybrid
       - RUN_AT=07:00
+      # set to 0 after the first test email arrives
       - RUN_ON_START=1
       - SEND_IF_CLEAR=1
       - AUTO_IGNORE_HOME=1
