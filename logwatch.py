@@ -32,6 +32,8 @@ WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "24"))
 MAX_CATCHUP_HOURS = int(os.getenv("MAX_CATCHUP_HOURS", "72"))
 MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5")
 MAX_LINES = int(os.getenv("MAX_LINES", "1500"))
+CLAUDE_MAX_INPUT_CHARS = max(20000, int(os.getenv("CLAUDE_MAX_INPUT_CHARS", "80000")))
+CLAUDE_MAX_LOG_LINE_CHARS = max(256, int(os.getenv("CLAUDE_MAX_LOG_LINE_CHARS", "2000")))
 STATE_FILE = os.getenv("STATE_FILE", "/data/state.json")
 SEND_IF_CLEAR = os.getenv("SEND_IF_CLEAR", "1") == "1"
 
@@ -564,18 +566,109 @@ def rules_report(summary, metrics, flags, meta, start, end):
 
 
 # ---------- claude ----------
+def _clip_for_claude(value, limit=CLAUDE_MAX_LOG_LINE_CHARS):
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    marker = f"... [truncated {len(text) - limit} chars]"
+    keep = max(0, limit - len(marker))
+    return text[:keep] + marker
+
+
+def _claude_summary(summary):
+    """Return the bounded, useful subset of the digest Claude needs to reason."""
+    client_class = summary.get("client_class", {})
+    health = dict(summary.get("health", {}))
+    health["gaps"] = list(health.get("gaps") or [])[:20]
+    return {
+        "total_lines": summary.get("total_lines"),
+        "non_json_lines": summary.get("non_json_lines"),
+        "non_json_samples": [_clip_for_claude(v) for v in summary.get("non_json_samples", [])[:10]],
+        "benign_startup_lines": summary.get("benign_startup_lines"),
+        "ignored_own_requests": summary.get("ignored_own_requests"),
+        "levels": summary.get("levels", {}),
+        "status_codes": summary.get("status_codes", {}),
+        "top_paths": [[_clip_for_claude(p, 1000), n] for p, n in summary.get("top_paths", [])[:25]],
+        "top_clients": [[c, n, client_class.get(c, "")] for c, n in summary.get("top_clients", [])[:25]],
+        "known_bots": summary.get("known_bots", {}),
+        "traffic_classes": summary.get("traffic_classes", {}),
+        "top_user_agents": [[_clip_for_claude(ua, 500), n] for ua, n in summary.get("top_user_agents", [])[:15]],
+        "spoofed_crawlers": [[ip, name, _clip_for_claude(ua, 500)]
+                             for ip, name, ua in summary.get("spoofed_crawlers", [])[:20]],
+        "probes": [[client, _clip_for_claude(path, 1000), code]
+                   for client, path, code in summary.get("probes", [])[:50]],
+        "probe_ips": summary.get("probe_ips", [])[:10],
+        "slow_requests": [[_clip_for_claude(path, 1000), ms]
+                          for path, ms in summary.get("slow_requests", [])[:20]],
+        "api_key_prefixes": summary.get("api_key_prefixes", [])[:50],
+        "health": health,
+        "lines_omitted": summary.get("lines_omitted", 0),
+    }
+
+
+def _bounded_log_excerpt(lines, budget):
+    """Fit clipped log lines into a character budget while preserving both ends."""
+    if budget <= 0 or not lines:
+        return "", 0
+    clipped = [_clip_for_claude(line) for line in lines]
+    joined = "\n".join(clipped)
+    if len(joined) <= budget:
+        return joined, len(clipped)
+
+    marker_reserve = 120
+    side_budget = max(0, (budget - marker_reserve) // 2)
+    head, used = [], 0
+    for line in clipped:
+        cost = len(line) + (1 if head else 0)
+        if used + cost > side_budget:
+            break
+        head.append(line)
+        used += cost
+
+    tail, used = [], 0
+    for line in reversed(clipped[len(head):]):
+        cost = len(line) + (1 if tail else 0)
+        if used + cost > side_budget:
+            break
+        tail.append(line)
+        used += cost
+    tail.reverse()
+
+    included = len(head) + len(tail)
+    omitted = max(0, len(clipped) - included)
+    marker = f"... {omitted} retained log lines omitted by Claude prompt budget ..."
+    excerpt = "\n".join(head + [marker] + tail)
+    if len(excerpt) > budget:
+        excerpt = excerpt[:max(0, budget - 30)] + "\n...[prompt excerpt truncated]"
+    return excerpt, included
+
+
 def claude_report(meta, summary, metrics, flags, history, kept, start, end):
     import anthropic
 
-    body = (
+    compact_summary = _claude_summary(summary)
+    base = (
         f"Window: {start.isoformat()} to {end.isoformat()}\n"
         f"Container: {json.dumps(meta)}\n"
         f"Rule flags: {json.dumps(flags)}\n"
         f"Today's metrics: {json.dumps(metrics)}\n"
         f"Baseline (last {len(history)} days): {json.dumps([d['metrics'] for d in history])}\n"
-        f"Summary: {json.dumps(summary, default=str)}\n\n"
-        "Remaining log lines:\n" + "\n".join(kept)
+        f"Summary: {json.dumps(compact_summary, default=str)}\n\n"
     )
+    log_budget = max(0, CLAUDE_MAX_INPUT_CHARS - len(SYSTEM_PROMPT) - len(base) - 300)
+    excerpt, included = _bounded_log_excerpt(kept, log_budget)
+    body = (
+        base
+        + f"Prompt sampling: {included}/{len(kept)} retained log lines included; "
+          f"individual lines capped at {CLAUDE_MAX_LOG_LINE_CHARS} chars.\n"
+        + "Remaining log lines:\n"
+        + excerpt
+    )
+    # Final fail-safe. The budget is intentionally far below Claude's context limit so
+    # tokenization variance in JSON, URLs, or Unicode cannot turn a busy night into a 400.
+    if len(body) > CLAUDE_MAX_INPUT_CHARS:
+        body = body[:CLAUDE_MAX_INPUT_CHARS - 40] + "\n...[prompt hard-truncated by logwatch]"
+
     resp = anthropic.Anthropic().messages.create(
         model=MODEL, max_tokens=2000, system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": body}],
