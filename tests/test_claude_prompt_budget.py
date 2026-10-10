@@ -71,7 +71,8 @@ class ClaudePromptBudgetTests(unittest.TestCase):
             self.assertEqual(result, "STATUS: ALL CLEAR")
             body = captured["messages"][0]["content"]
             self.assertLessEqual(len(body), 20000)
-            self.assertIn("Prompt sampling:", body)
+            self.assertIn("Today's metrics", body)
+            self.assertIn("prompt hard-truncated by logwatch", body)
             self.assertNotIn("203.0.113.9999", body)
         finally:
             logwatch.CLAUDE_MAX_INPUT_CHARS = old_budget
