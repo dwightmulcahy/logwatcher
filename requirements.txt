@@ -1,2 +1,2 @@
 docker>=7.2.0,<8
-anthropic>=1.13.0
+anthropic>=1.16.0
